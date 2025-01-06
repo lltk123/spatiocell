@@ -11,8 +11,8 @@ def zscore(data):
     standardized_data = (data - mean) / std
     return standardized_data
 
-def normal(df,chanel):
-    df = pd.DataFrame(df.X.copy(),columns=chanel)
+def normal(adata,chanel):
+    df = pd.DataFrame(adata.X.copy(),columns=chanel)
     quantiles = df.quantile(0.2)
     for col in chanel:
         if col in df.columns:
@@ -20,6 +20,7 @@ def normal(df,chanel):
         else:
             df[col] = np.nan
     df[chanel] = df[chanel].apply(zscore)
+    adata.X = np.array(df)
     return df
 
 def read_file_info(directory ,info_dir,chanel = None):
