@@ -11,17 +11,29 @@ def zscore(data):
     standardized_data = (data - mean) / std
     return standardized_data
 
-def normal(adata,chanel):
-    df = pd.DataFrame(adata.X.copy(),columns=chanel)
-    quantiles = df.quantile(0.2)
-    for col in chanel:
-        if col in df.columns:
-            df[col] = df[col].apply(normalize_value, q=quantiles[col])
-        else:
-            df[col] = np.nan
-    df[chanel] = df[chanel].apply(zscore)
-    adata.X = np.array(df)
-    return df
+def normal(adata,batch = None):
+    chanel = adata.var_names
+    if batch is None:
+        df = adata.X.copy()
+        quantiles = df.quantile(0.2)
+        for col in chanel:
+            if col in df.columns:
+                df[col] = df[col].apply(normalize_value, q=quantiles[col])
+            else:
+                df[col] = np.nan
+    elif batch not in adata.obs.columns:
+        ValueError('batch not in adata.obs.columns')
+    else:
+        for i in adata.obs[batch].unique():
+            df = pd.DataFrame(adata[adata.obs[batch] == i].X.copy(),columns=chanel)
+            quantiles = df.quantile(0.2)
+            for col in chanel:
+                if col in df.columns:
+                    df[col] = df[col].apply(normalize_value, q=quantiles[col])
+                else:
+                    df[col] = np.nan
+            df[chanel] = df[chanel].apply(zscore)
+            adata[adata.obs[batch] == i].X = np.array(df)
 
 def read_file_info(directory ,info_dir,chanel = None):
     file_list = os.listdir(directory)
