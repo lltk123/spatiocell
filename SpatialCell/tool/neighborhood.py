@@ -7,6 +7,9 @@ from sklearn.preprocessing import LabelEncoder
 from scipy.stats import zscore
 from tqdm import tqdm
 import pandas as pd
+from scipy.stats import pearsonr
+import seaborn as sns
+import matplotlib.pyplot as plt
 
 def compute_neighborhood_stats(pos, labels, radius=None,encoder = None):
     if radius is None:
@@ -33,7 +36,7 @@ def neighborhood(adata,batch = None,groupby = 'cell_type',radius = None):
     if batch is None:
         batch = 'batch'
         adata.obs[batch] = '_virtual'
-    for key in tqdm(adata.obs[batch].unique()):
+    for key in tqdm(adata.obs[batch].unique(), leave=True):
         sub = adata[adata.obs[batch] == key]
         pos = sub.obsm['spatial']
         labels = sub.obs[groupby].values
@@ -50,3 +53,52 @@ def neighborhood(adata,batch = None,groupby = 'cell_type',radius = None):
         adata.obsm['nbor_counts'][indices,:] = np.array(nbor_stats)
     if key == '_virtual':
         adata.obs.pop('batch', None)
+
+def corr_pl(adata,satge_order,batch ='sample',groupby = 'cell_type',stage = 'stage' , ax = None,figsize=(10, 8),cmap = 'coolwarm'):
+    if 'nbor_counts' not in adata.obsm.keys():
+         raise ValueError("Dont have neighborhood counts, please run neighborhood first")
+    
+    figdf = pd.DataFrame(adata.obsm['nbor_counts'], columns = adata.uns['nbor_label'] ,index = adata.obs_names)
+    figdf['cell_type'] = adata.obs[groupby]
+    figdf['stage'] = adata.obs[stage]
+    figdf['sample'] = adata.obs[batch]
+    figdf = figdf.groupby(by = ['cell_type','stage','sample']).mean()
+    figdf = figdf.reset_index()
+    figdf.dropna(inplace = True)
+    figdf['stage'] = figdf['stage'].map(satge_order)
+    corrdf = pd.DataFrame()
+
+    for i in figdf['cell_type'].unique():
+        subdf = figdf[figdf['cell_type'] == i]
+        correlations = {}
+        for column in subdf.columns:
+            if column not in ['cell_type','stage','sample']:  # 排除 'col1' 自己与自己相关
+                corr, p_value = pearsonr(subdf['stage'], subdf[column])
+                correlations[column] = {'correlation': corr, 'p_value': p_value}
+        correlations = pd.DataFrame(correlations).T
+        correlations['center_cell'] = i
+        corrdf = pd.concat([corrdf,correlations])
+    corrdf['cell_type'] = corrdf.index
+    corr_value = corrdf.pivot(columns='cell_type',index ='center_cell', values='correlation')
+    corr_p = corrdf.pivot(columns='cell_type',index ='center_cell', values='p_value')
+    adata.uns['stage_corr_nborh'] = corrdf
+    heatmap_data = corr_value
+    p_value_data = corr_p
+
+    if ax == None:
+        fig, ax = plt.subplots(figsize=figsize,)
+    sns.heatmap(heatmap_data, annot=False, cmap=cmap, ax=ax , )
+
+    # 添加显著性标记
+    for i in range(len(p_value_data)):
+        for j in range(len(p_value_data.columns)):
+            p_value = p_value_data.iloc[i, j]
+            if p_value <= 0.001:
+                ax.text(j + 0.5, i + 0.5, '***', ha='center', va='center', color='white', fontsize=12)
+            elif p_value <= 0.01:
+                ax.text(j + 0.5, i + 0.5, '**', ha='center', va='center', color='white', fontsize=12)
+            elif p_value <= 0.05:
+                ax.text(j + 0.5, i + 0.5, '*', ha='center', va='center', color='white', fontsize=12)
+    return fig,ax
+    
+
