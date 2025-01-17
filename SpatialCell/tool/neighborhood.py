@@ -1,6 +1,4 @@
-# from Allen et al., 2023
 
-# for each cell compute statistics of neighbors within radius
 import numpy as np
 from sklearn.neighbors import KDTree
 from sklearn.preprocessing import LabelEncoder
@@ -11,6 +9,11 @@ from scipy.stats import pearsonr
 import seaborn as sns
 import matplotlib.pyplot as plt
 
+from sklearn.mixture import GaussianMixture
+
+# from Allen et al., 2023
+
+# for each cell compute statistics of neighbors within radius
 def compute_neighborhood_stats(pos, labels, radius=None,encoder = None):
     if radius is None:
         radius = np.mean(np.linalg.norm(pos[1:] - pos[:-1], axis=1))/100
@@ -41,20 +44,26 @@ def neighborhood(adata,batch = None,groupby = 'cell_type',radius = None):
         pos = sub.obsm['spatial']
         labels = sub.obs[groupby].values
         if 'nbor_label' in adata.uns.keys():
+            encoder = LabelEncoder()
+            encoder.classes_ = adata.uns['encorder']["classes_"]
             nbor_stats,_ = compute_neighborhood_stats(pos, labels, radius,encoder)
         else:
             nbor_stats,encoder = compute_neighborhood_stats(pos, labels, radius)
-            adata.uns['encorder'] = encoder
-            adata.uns['nbor_label'] = nbor_stats.columns
+            encoder_dict = {"classes_": encoder.classes_.tolist()}
+            adata.uns['encorder'] = encoder_dict
+            adata.uns['nbor_label'] = list(nbor_stats.columns)
             adata.obsm['nbor_counts'] = np.zeros((adata.shape[0],
                                                   len(adata.obs['cell_type'].cat.categories)))
         indices = adata.obs_names.get_indexer(sub.obs_names)
-        
+        nbor_stats = nbor_stats.div(nbor_stats.sum(axis=1), axis=0)
+        nbor_stats = nbor_stats.fillna(0)
+
         adata.obsm['nbor_counts'][indices,:] = np.array(nbor_stats)
     if key == '_virtual':
         adata.obs.pop('batch', None)
 
-def corr_pl(adata,satge_order,batch ='sample',groupby = 'cell_type',stage = 'stage' , ax = None,figsize=(10, 8),cmap = 'coolwarm'):
+
+def get_corrdf(adata,satge_order,batch ='sample',groupby = 'cell_type',stage = 'stage'):
     if 'nbor_counts' not in adata.obsm.keys():
          raise ValueError("Dont have neighborhood counts, please run neighborhood first")
     
@@ -84,7 +93,12 @@ def corr_pl(adata,satge_order,batch ='sample',groupby = 'cell_type',stage = 'sta
     adata.uns['stage_corr_nborh'] = corrdf
     heatmap_data = corr_value
     p_value_data = corr_p
+    return heatmap_data,p_value_data
 
+
+def corr_pl(adata,satge_order,batch ='sample',groupby = 'cell_type',stage = 'stage' , ax = None,figsize=(10, 8),cmap = 'coolwarm'):
+
+    heatmap_data,p_value_data = get_corrdf(adata,satge_order,batch,groupby,stage)
     if ax == None:
         fig, ax = plt.subplots(figsize=figsize,)
     sns.heatmap(heatmap_data, annot=False, cmap=cmap, ax=ax , )
@@ -102,3 +116,35 @@ def corr_pl(adata,satge_order,batch ='sample',groupby = 'cell_type',stage = 'sta
     return fig,ax
     
 
+def aic_bic(adata , extent = (1,10)):
+    random_state = 42
+    data = adata.obsm['nbor_counts']
+    n_samples = int(data.shape[0] / 10)
+    np.random.seed(random_state)
+    indices = np.random.choice(data.shape[0], size=n_samples, replace=False)
+    X = data[indices, :]
+        # 设置最大簇数
+
+    # 初始化 AIC 和 BIC 的存储列表
+    aic_values = []
+    bic_values = []
+    components = np.arange(extent[0], extent[1], 1)
+    # 计算每个簇数对应的 AIC 和 BIC
+    for n in components:
+        gmm = GaussianMixture(n_components=n, random_state=random_state)
+        gmm.fit(X)
+        aic_values.append(gmm.aic(X))
+        bic_values.append(gmm.bic(X))
+
+    # 可视化 AIC 和 BIC
+    plt.figure(figsize=(8, 5))
+    plt.plot(components, aic_values, label='AIC', marker='o')
+    plt.plot(components, bic_values, label='BIC', marker='s')
+    plt.xticks(components)
+    plt.title("AIC and BIC for Gaussian Mixture Models")
+    plt.xlabel("Number of Components")
+    plt.ylabel("Information Criterion Value")
+    plt.legend()
+    plt.grid()
+    plt.show()
+    return aic_values,bic_values
