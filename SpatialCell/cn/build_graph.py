@@ -7,6 +7,8 @@ from torch_geometric.utils import to_undirected, k_hop_subgraph
 import pandas as pd
 import matplotlib.pyplot as plt
 
+from sklearn.preprocessing import OneHotEncoder
+
 def calculate_edge_weights(pos, edge_index):
         # 使用广播来计算欧几里得距离
     node_i_pos = pos[edge_index[0]]  # 获取所有边的第一个节点的位置
@@ -64,37 +66,57 @@ class GraphDataset(Dataset):
         self.groupby = groupby
         self.spatial = spatial
         self.G = {}
-    
+        self.onehot_coder = OneHotEncoder(sparse=False)
+        _ = self.onehot_coder.fit_transform(adata.obs[groupby].values.reshape(-1,1))
+        encoder = LabelEncoder()
+        if 'encorder' in self.adata.uns.keys():
+            classes = self.adata.uns['encorder']['classes_']
+            encoder.fit(classes)
+        else:
+            encoder.fit(adata.obs[groupby])
+        self.encorder = encoder
+
     def __getitem__(self, idx,reset = False):
-        if reset == False and idx in self.G.keys():
+        if reset == True and idx in self.G.keys():
             return self.G[idx]
         sub = self.adata[self.adata.obs[self.batch] == idx]
         pos = torch.tensor(sub.obsm[self.spatial])
         labels = sub.obs[self.groupby]
-        encoder = LabelEncoder()
-        if 'encorder' in self.adata.uns.keys():
-            encoder.classes_ = self.adata.uns['encorder']["classes_"]
+        
+        encoder = self.encorder
         labels_quant = encoder.fit_transform(labels)
-        self.encorder = encoder
         data = get_Graph(pos, labels_quant)
+
+        onehot_coder = self.onehot_coder
+        data.onehot = onehot_coder.transform(labels.values.reshape(-1,1))
         self.G[idx] = data
         return data
     
     def __len__(self):
         return len(self.adata.obs[self.batch].unique())
     
-    def get_subgraph(self,idx, node_idx, k):
+    def get_subgraph(self,idx, node_idx, k = 1):
         if idx not in self.G.keys():
             self.__getitem__(idx)
         G = self.G[idx]
         subgraph_node_idx , subgraph_edge_index , _  = get_k_hop_subgraph(node_idx, k, G)
+        if len(subgraph_node_idx) == 0:
+            print(f'No subgraph for {node_idx}')
+            return None
         map_dict = {subgraph_node_idx.tolist()[i]:i for i in range(len(subgraph_node_idx))}
-        edge = torch.tensor([pd.Series(i).map(map_dict) for i in subgraph_edge_index])
+
+        keys = torch.tensor(range(len(subgraph_node_idx)))
+        values = torch.tensor(subgraph_node_idx)
+        result_tensor = torch.stack((keys, values))
+
+        edge = torch.tensor([pd.Series(i).map(map_dict) for i in subgraph_edge_index] , dtype = torch.int32)
         subG = Data(edge_index = edge,
-                    center = map_dict[node_idx],
+                    center = int(map_dict[node_idx]),
                     pos = G.pos[subgraph_node_idx],
                     label = G.label[subgraph_node_idx] , 
-                    original_dir = map_dict)
+                    onehot = G.onehot[subgraph_node_idx],
+                    original_dir = result_tensor,
+                    k = k)
         return subG
 
     def plG(self,G):
